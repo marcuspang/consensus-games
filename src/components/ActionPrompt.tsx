@@ -31,12 +31,12 @@ export function ActionPrompt({ phase, onAction }: Props) {
   return (
     <div className="mb-4">
       <p className="font-bold">{prompt}</p>
-      <div className="space-x-2">
+      <div className="flex gap-2">
         {actions.map((action) => (
           <button
             key={action}
             onClick={() => onAction(action)}
-            className="px-2 py-1 font-bold text-white bg-green-500 rounded hover:bg-green-700"
+            className="px-4 py-2 font-bold text-white bg-green-500 rounded hover:bg-green-700"
           >
             {action}
           </button>

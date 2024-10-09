@@ -5,7 +5,6 @@ import { Message } from "./components/Message";
 import { Node } from "./components/Node";
 
 const NUM_NODES = 12;
-const BYZANTINE_PROBABILITY = 0.2;
 
 export interface NodeFields {
   id: number;
@@ -41,8 +40,16 @@ export enum NodeState {
 export interface Block {
   number: number;
   value: string;
+  isByzantine: boolean;
 }
 
+/**
+ * numNodes = 3f + 1
+ * f = (numNodes - 1) / 3
+ *
+ * @param numNodes
+ * @returns
+ */
 function getByzantineFaultToleranceThreshold(numNodes: number): number {
   return Math.floor((numNodes - 1) / 3);
 }
@@ -56,6 +63,7 @@ function isByzantineFaultTolerant(
 
 export default function App() {
   const [isAllHonest, setIsAllHonest] = useState(false);
+  const [byzantineProbability, setByzantineProbability] = useState(0.2);
   const [nodes, setNodes] = useState<NodeFields[]>(
     Array(NUM_NODES)
       .fill(null)
@@ -63,7 +71,7 @@ export default function App() {
         id: i,
         state: NodeState.IDLE,
         value: null,
-        isByzantine: Math.random() < BYZANTINE_PROBABILITY,
+        isByzantine: Math.random() < byzantineProbability,
       }))
   );
   const [messages, setMessages] = useState<MessageFields[]>([]);
@@ -86,7 +94,7 @@ export default function App() {
       setNodes((prev) =>
         prev.map((node) => ({
           ...node,
-          isByzantine: Math.random() < BYZANTINE_PROBABILITY,
+          isByzantine: Math.random() < byzantineProbability,
         }))
       );
     }
@@ -154,10 +162,16 @@ export default function App() {
 
       // Add new block to the blockchain
       const consensusValue = getMajorityValue(newNodes);
+      console.log({ consensusValue, action });
       if (consensusValue) {
         setBlockchain([
           ...blockchain,
-          { number: blockchain.length, value: consensusValue },
+          {
+            number: blockchain.length,
+            value: consensusValue,
+            // If the consensus value is not the same as the action, then the Byzantine nodes won
+            isByzantine: consensusValue !== action,
+          },
         ]);
         setFailureCount(0);
         setCurrentPhase(Phase.IDLE);
@@ -219,7 +233,7 @@ export default function App() {
       return acc;
     }, {} as Record<string, number>);
 
-    // Check if majority count passes the Byzantine fault tolerance threshold
+    // Check if majority count passes the Byzantine fault tolerance threshold = 2f + 1
     const threshold = 2 * getByzantineFaultToleranceThreshold(NUM_NODES) + 1;
     const majorityValue = Object.entries(valueCounts).reduce((a, b) =>
       a[1] > b[1] ? a : b
@@ -241,6 +255,20 @@ export default function App() {
           {isAllHonest ? "Enable Byzantine Nodes" : "Disable Byzantine Nodes"}
         </button>
       </div>
+      <div className="flex items-center gap-2 mb-4">
+        <label htmlFor="byzantine-probability">
+          Byzantine Probability: {byzantineProbability}
+        </label>
+        <input
+          type="range"
+          id="byzantine-probability"
+          min="0"
+          max="1"
+          step="0.01"
+          value={byzantineProbability}
+          onChange={(e) => setByzantineProbability(Number(e.target.value))}
+        />
+      </div>
       <p className="mb-4">Current Phase: {currentPhase}</p>
       <p className="mb-4">Current View: {currentView}</p>
       <p className="mb-4">
@@ -251,7 +279,7 @@ export default function App() {
         Is Byzantine Fault Tolerant:{" "}
         {isByzantineFaultTolerant(byzantineNodeCount, NUM_NODES) ? "Yes" : "No"}
       </p>
-      <div className="flex justify-around mb-4">
+      <div className="grid grid-cols-8 gap-4 mb-4">
         {nodes.map((node) => (
           <Node
             key={node.id}
