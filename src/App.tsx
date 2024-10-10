@@ -3,14 +3,15 @@ import { ActionPrompt } from "./components/ActionPrompt";
 import { Blockchain } from "./components/Blockchain";
 import { Message } from "./components/Message";
 import { Node } from "./components/Node";
-
-const NUM_NODES = 12;
+import { NodeDetails } from "./components/NodeDetails";
+import { toast, Toaster } from "sonner";
 
 export interface NodeFields {
   id: number;
   state: string;
   value: string | null;
   isByzantine: boolean;
+  view: number;
 }
 
 export interface MessageFields {
@@ -18,6 +19,7 @@ export interface MessageFields {
   to: string;
   type: string;
   value: string | null;
+  view: number;
 }
 
 export enum Phase {
@@ -64,17 +66,21 @@ function isByzantineFaultTolerant(
 export default function App() {
   const [isAllHonest, setIsAllHonest] = useState(false);
   const [byzantineProbability, setByzantineProbability] = useState(0.2);
+  const [messages, setMessages] = useState<MessageFields[]>([]);
+  const [numNodes, setNumNodes] = useState(10);
   const [nodes, setNodes] = useState<NodeFields[]>(
-    Array(NUM_NODES)
+    Array(numNodes)
       .fill(null)
       .map((_, i) => ({
         id: i,
         state: NodeState.IDLE,
         value: null,
         isByzantine: Math.random() < byzantineProbability,
+        view: 0,
       }))
   );
-  const [messages, setMessages] = useState<MessageFields[]>([]);
+  const [showAllMessages, setShowAllMessages] = useState(false);
+  const [selectedNode, setSelectedNode] = useState<number | null>(null);
   const [currentPhase, setCurrentPhase] = useState<Phase>(Phase.IDLE);
   const [blockchain, setBlockchain] = useState<Block[]>([]);
   const [currentView, setCurrentView] = useState(0);
@@ -99,6 +105,20 @@ export default function App() {
       );
     }
   }, [isAllHonest]);
+
+  useEffect(() => {
+    setNodes(
+      Array(numNodes)
+        .fill(null)
+        .map((_, i) => ({
+          id: i,
+          state: NodeState.IDLE,
+          value: null,
+          isByzantine: Math.random() < byzantineProbability,
+          view: 0,
+        }))
+    );
+  }, [numNodes, byzantineProbability]);
 
   const startConsensus = () => {
     setCurrentPhase(Phase.PROPOSE);
@@ -126,101 +146,140 @@ export default function App() {
         node.state = NodeState.PROPOSED;
       });
       setCurrentPhase(Phase.PRE_PREPARE);
-    } else if (currentPhase === Phase.PRE_PREPARE) {
-      newNodes.forEach((node) => {
-        newMessages.push({
+      automaticConsensus(newNodes, newMessages, action);
+    }
+  };
+
+  const automaticConsensus = (
+    nodes: NodeFields[],
+    messages: MessageFields[],
+    clientAction: string
+  ) => {
+    // Pre-prepare phase
+    nodes.forEach((node) => {
+      const recipients = nodes.filter((n) => n.id !== node.id);
+      recipients.forEach((recipient) => {
+        messages.push({
           from: node.id,
-          to: "all",
+          to: recipient.id.toString(),
           type: "pre-prepare",
           value: node.value,
+          view: node.view,
         });
-        node.state = NodeState.PRE_PREPARED;
       });
-      setCurrentPhase(Phase.PREPARE);
-    } else if (currentPhase === Phase.PREPARE) {
-      newNodes.forEach((node) => {
-        newMessages.push({
-          from: node.id,
-          to: "all",
-          type: "prepare",
-          value: action,
-        });
-        node.state = NodeState.PREPARED;
-        node.value = node.isByzantine ? (action === "A" ? "B" : "A") : action;
-      });
-      setCurrentPhase(Phase.COMMIT);
-    } else if (currentPhase === Phase.COMMIT) {
-      newNodes.forEach((node) => {
-        newMessages.push({
-          from: node.id,
-          to: "all",
-          type: "commit",
-          value: node.isByzantine ? (action === "A" ? "B" : "A") : action,
-        });
-        node.state = NodeState.COMMITTED;
-      });
+      node.state = NodeState.PRE_PREPARED;
+    });
 
-      // Add new block to the blockchain
-      const consensusValue = getMajorityValue(newNodes);
-      console.log({ consensusValue, action });
-      if (consensusValue) {
-        setBlockchain([
-          ...blockchain,
-          {
-            number: blockchain.length,
-            value: consensusValue,
-            // If the consensus value is not the same as the action, then the Byzantine nodes won
-            isByzantine: consensusValue !== action,
-          },
-        ]);
-        setFailureCount(0);
-        setCurrentPhase(Phase.IDLE);
-      } else {
-        console.error("Consensus failed");
-        newMessages.push({
+    // Prepare phase
+    nodes.forEach((node) => {
+      const prepareValue = node.isByzantine
+        ? clientAction === "A"
+          ? "B"
+          : "A"
+        : clientAction;
+      const recipients = nodes.filter((n) => n.id !== node.id);
+      recipients.forEach((recipient) => {
+        messages.push({
+          from: node.id,
+          to: recipient.id.toString(),
+          type: "prepare",
+          value: prepareValue,
+          view: node.view,
+        });
+      });
+      node.state = NodeState.PREPARED;
+      node.value = prepareValue;
+    });
+
+    // Commit phase
+    nodes.forEach((node) => {
+      const commitValue = node.isByzantine
+        ? clientAction === "A"
+          ? "B"
+          : "A"
+        : clientAction;
+      const recipients = nodes.filter((n) => n.id !== node.id);
+      recipients.forEach((recipient) => {
+        messages.push({
+          from: node.id,
+          to: recipient.id.toString(),
+          type: "commit",
+          value: commitValue,
+          view: node.view,
+        });
+      });
+      node.state = NodeState.COMMITTED;
+    });
+
+    // Add new block to the blockchain
+    const consensusValue = getMajorityValue(nodes);
+    if (consensusValue) {
+      setBlockchain((prevBlockchain) => [
+        ...prevBlockchain,
+        {
+          number: prevBlockchain.length,
+          value: consensusValue,
+          isByzantine: consensusValue !== clientAction,
+        },
+      ]);
+      setFailureCount(0);
+      setCurrentPhase(Phase.IDLE);
+    } else {
+      nodes.forEach((node) => {
+        messages.push({
           from: -1,
-          to: "all",
+          to: node.id.toString(),
           type: "error",
           value: "Consensus failed",
+          view: node.view,
         });
-        handleConsensusFailure();
-      }
+      });
+      handleConsensusFailure();
     }
 
-    setNodes(newNodes);
-    setMessages(newMessages);
+    setNodes(nodes);
+    setMessages(messages);
   };
 
   const handleConsensusFailure = () => {
-    setFailureCount((prev) => prev + 1);
-    if (failureCount >= 2) {
-      initiateViewChange();
-    } else {
-      setCurrentPhase(Phase.PROPOSE);
-    }
+    setFailureCount((prev) => {
+      toast.error(`Consensus failed, failure count: ${prev + 1}`);
+      if (prev >= 2) {
+        initiateViewChange();
+      } else {
+        setCurrentPhase(Phase.PROPOSE);
+      }
+
+      return prev + 1;
+    });
   };
 
   const initiateViewChange = () => {
-    setCurrentView((prev) => prev + 1);
+    toast.info("Initiating view change");
     setCurrentPhase(Phase.VIEW_CHANGE);
     setFailureCount(0);
+    setCurrentView((prev) => {
+      const newMessages = [...messages];
+      newMessages.push({
+        from: -1,
+        to: "all",
+        type: "view-change",
+        value: `View changed to ${prev + 1}`,
+        view: prev,
+      });
 
-    const newMessages = [...messages];
-    newMessages.push({
-      from: -1,
-      to: "all",
-      type: "view-change",
-      value: `View changed to ${currentView + 1}`,
+      setMessages(newMessages);
+      return prev + 1;
     });
-    setMessages(newMessages);
 
     // Reset nodes for the new view
-    setNodes(
-      nodes.map((node) => ({ ...node, state: NodeState.IDLE, value: null }))
+    setNodes((prev) =>
+      prev.map((node) => ({ ...node, state: NodeState.IDLE, value: null }))
     );
 
     // After a short delay, start a new consensus round
     setTimeout(() => {
+      toast.info("Starting new consensus round");
       setCurrentPhase(Phase.PROPOSE);
     }, 2000);
   };
@@ -234,7 +293,7 @@ export default function App() {
     }, {} as Record<string, number>);
 
     // Check if majority count passes the Byzantine fault tolerance threshold = 2f + 1
-    const threshold = 2 * getByzantineFaultToleranceThreshold(NUM_NODES) + 1;
+    const threshold = 2 * getByzantineFaultToleranceThreshold(numNodes) + 1;
     const majorityValue = Object.entries(valueCounts).reduce((a, b) =>
       a[1] > b[1] ? a : b
     )[0];
@@ -242,6 +301,17 @@ export default function App() {
       return majorityValue;
     }
     return null;
+  };
+
+  const handleNodeClick = (nodeId: number) => {
+    setSelectedNode(nodeId === selectedNode ? null : nodeId);
+  };
+
+  const getMessagesForNode = (nodeId: number) => {
+    console.log({ messages, nodeId });
+    return messages.filter(
+      (msg) => msg.from === nodeId || msg.to === nodeId.toString()
+    );
   };
 
   return (
@@ -256,9 +326,19 @@ export default function App() {
         </button>
       </div>
       <div className="flex items-center gap-2 mb-4">
-        <label htmlFor="byzantine-probability">
-          Byzantine Probability: {byzantineProbability}
-        </label>
+        <label htmlFor="num-nodes">Number of Nodes:</label>
+        <input
+          type="number"
+          id="num-nodes"
+          min="1"
+          step="1"
+          value={numNodes}
+          className="px-4 py-2 border-2 rounded"
+          onChange={(e) => setNumNodes(Number(e.target.value))}
+        />
+      </div>
+      <div className="flex gap-2 mb-4">
+        <label htmlFor="byzantine-probability w-8">Byzantine Probability</label>
         <input
           type="range"
           id="byzantine-probability"
@@ -268,17 +348,36 @@ export default function App() {
           value={byzantineProbability}
           onChange={(e) => setByzantineProbability(Number(e.target.value))}
         />
+        <p>{byzantineProbability}</p>
       </div>
       <p className="mb-4">Current Phase: {currentPhase}</p>
       <p className="mb-4">Current View: {currentView}</p>
       <p className="mb-4">
-        Byzantine Nodes: {byzantineNodeCount} / {NUM_NODES} (
-        {Math.round((byzantineNodeCount / NUM_NODES) * 100)}%)
+        Byzantine Nodes: {byzantineNodeCount} / {numNodes} (
+        {Math.round((byzantineNodeCount / numNodes) * 100)}%)
       </p>
       <p className="mb-4">
         Is Byzantine Fault Tolerant:{" "}
-        {isByzantineFaultTolerant(byzantineNodeCount, NUM_NODES) ? "Yes" : "No"}
+        {isByzantineFaultTolerant(byzantineNodeCount, numNodes) ? "Yes" : "No"}
       </p>
+
+      <Blockchain blocks={blockchain} />
+
+      {currentPhase === Phase.IDLE ? (
+        <button
+          onClick={startConsensus}
+          className="px-4 py-2 mb-4 font-bold text-white bg-blue-500 rounded hover:bg-blue-700"
+        >
+          Start Consensus Round
+        </button>
+      ) : currentPhase === Phase.PROPOSE ? (
+        <ActionPrompt phase={currentPhase} onAction={handleAction} />
+      ) : (
+        <p className="mb-4 text-yellow-600">
+          Consensus in progress: {currentPhase}
+        </p>
+      )}
+
       <div className="grid grid-cols-8 gap-4 mb-4">
         {nodes.map((node) => (
           <Node
@@ -287,27 +386,30 @@ export default function App() {
             isActive={
               currentPhase !== Phase.IDLE && currentPhase !== Phase.VIEW_CHANGE
             }
+            isSelected={node.id === selectedNode}
+            onClick={() => handleNodeClick(node.id)}
           />
         ))}
       </div>
-      {currentPhase === Phase.IDLE ? (
+
+      {selectedNode !== null && (
+        <NodeDetails
+          node={nodes.find((n) => n.id === selectedNode)!}
+          messages={getMessagesForNode(selectedNode)}
+        />
+      )}
+
+      <div className="mb-4 space-y-2">
         <button
-          onClick={startConsensus}
+          onClick={() => setShowAllMessages((prev) => !prev)}
           className="px-4 py-2 mb-4 font-bold text-white bg-blue-500 rounded hover:bg-blue-700"
         >
-          Start Consensus Round
+          {showAllMessages ? "Hide All Messages" : "Show All Messages"}
         </button>
-      ) : currentPhase !== Phase.VIEW_CHANGE ? (
-        <ActionPrompt phase={currentPhase} onAction={handleAction} />
-      ) : (
-        <p className="mb-4 text-yellow-600">View change in progress...</p>
-      )}
-      <Blockchain blocks={blockchain} />
-      <div className="mb-4 space-y-2">
-        {messages.map((msg, index) => (
-          <Message key={index} {...msg} />
-        ))}
+        {showAllMessages &&
+          messages.map((msg, index) => <Message key={index} {...msg} />)}
       </div>
+      <Toaster />
     </div>
   );
 }

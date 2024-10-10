@@ -6,33 +6,15 @@ interface Props {
 }
 
 export function ActionPrompt({ phase, onAction }: Props) {
-  let prompt = "";
-  let actions: string[] = [];
-
-  switch (phase) {
-    case Phase.PROPOSE:
-      prompt = `Propose a value:`;
-      actions = ["A", "B"];
-      break;
-    case Phase.PRE_PREPARE:
-      prompt = `Send pre-prepare message:`;
-      actions = ["Send"];
-      break;
-    case Phase.PREPARE:
-      prompt = `Prepare a value:`;
-      actions = ["A", "B"];
-      break;
-    case Phase.COMMIT:
-      prompt = `Commit to a value:`;
-      actions = ["A", "B"];
-      break;
+  if (phase !== Phase.PROPOSE) {
+    return null;
   }
 
   return (
     <div className="mb-4">
-      <p className="font-bold">{prompt}</p>
+      <p className="font-bold">Choose a value to send as client:</p>
       <div className="flex gap-2">
-        {actions.map((action) => (
+        {["A", "B"].map((action) => (
           <button
             key={action}
             onClick={() => onAction(action)}
