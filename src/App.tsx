@@ -70,7 +70,12 @@ export class Node {
 export class LeaderNode extends Node {
   totalNodes: number;
 
-  constructor(id: number, isByzantine: boolean, byzantineProbability: number, totalNodes: number) {
+  constructor(
+    id: number,
+    isByzantine: boolean,
+    byzantineProbability: number,
+    totalNodes: number
+  ) {
     super(id, isByzantine, byzantineProbability);
     this.totalNodes = totalNodes;
   }
@@ -204,7 +209,12 @@ export default function App() {
     setNodes((prevNodes) => {
       const newNodes = prevNodes.map((node, index) =>
         index === newLeader
-          ? new LeaderNode(node.id, node.isByzantine, byzantineProbability, numNodes)
+          ? new LeaderNode(
+              node.id,
+              node.isByzantine,
+              byzantineProbability,
+              numNodes
+            )
           : node
       );
       return newNodes;
@@ -393,6 +403,7 @@ export default function App() {
       </div>
       <p className="mb-4">Current Phase: {currentPhase}</p>
       <p className="mb-4">Current View: {currentView}</p>
+      <p className="mb-4">Failure Count: {failureCount}</p>
       <p className="mb-4">Current Leader: Node {currentLeader}</p>
       <p className="mb-4">
         Byzantine Nodes: {byzantineNodeCount} / {numNodes} (
