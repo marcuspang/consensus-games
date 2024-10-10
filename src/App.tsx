@@ -1,10 +1,91 @@
 import { useEffect, useState } from "react";
+import { toast, Toaster } from "sonner";
 import { ActionPrompt } from "./components/ActionPrompt";
 import { Blockchain } from "./components/Blockchain";
 import { Message } from "./components/Message";
-import { Node } from "./components/Node";
+import { Node as NodeComponent } from "./components/Node";
 import { NodeDetails } from "./components/NodeDetails";
-import { toast, Toaster } from "sonner";
+
+export class Node {
+  id: number;
+  state: NodeState;
+  value: string | null;
+  isByzantine: boolean;
+  byzantineProbability: number;
+  view: number;
+
+  constructor(id: number, isByzantine: boolean, byzantineProbability: number) {
+    this.id = id;
+    this.state = NodeState.IDLE;
+    this.value = null;
+    this.isByzantine = isByzantine;
+    this.byzantineProbability = byzantineProbability;
+    this.view = 0;
+  }
+
+  reset() {
+    this.state = NodeState.IDLE;
+    this.value = null;
+  }
+
+  propose(value: string) {
+    this.value = this.isByzantine ? (value === "A" ? "B" : "A") : value;
+    this.state = NodeState.PROPOSED;
+  }
+
+  prePrepare(value: string): MessageFields[] {
+    this.value = value;
+    this.state = NodeState.PRE_PREPARED;
+    return [];
+  }
+
+  prepare(value: string, totalNodes: number): MessageFields[] {
+    const prepareValue = this.isByzantine ? (value === "A" ? "B" : "A") : value;
+    this.value = prepareValue;
+    this.state = NodeState.PREPARED;
+
+    return Array.from({ length: totalNodes }, (_, i) => ({
+      from: this.id,
+      to: i.toString(),
+      type: "prepare",
+      value: prepareValue,
+      view: this.view,
+    })).filter((msg) => msg.to !== this.id.toString());
+  }
+
+  commit(value: string, totalNodes: number): MessageFields[] {
+    const commitValue = this.isByzantine ? (value === "A" ? "B" : "A") : value;
+    this.state = NodeState.COMMITTED;
+
+    return Array.from({ length: totalNodes }, (_, i) => ({
+      from: this.id,
+      to: i.toString(),
+      type: "commit",
+      value: commitValue,
+      view: this.view,
+    })).filter((msg) => msg.to !== this.id.toString());
+  }
+}
+
+export class LeaderNode extends Node {
+  totalNodes: number;
+
+  constructor(id: number, isByzantine: boolean, byzantineProbability: number, totalNodes: number) {
+    super(id, isByzantine, byzantineProbability);
+    this.totalNodes = totalNodes;
+  }
+
+  prePrepare(value: string): MessageFields[] {
+    super.prePrepare(value);
+    return Array.from({ length: this.totalNodes }, (_, i) => ({
+      from: this.id,
+      to: i.toString(),
+      type: "pre-prepare",
+      value: this.value,
+      view: this.view,
+    })).filter((msg) => msg.to !== this.id.toString());
+  }
+}
 
 export interface NodeFields {
   id: number;
@@ -68,23 +149,13 @@ export default function App() {
   const [byzantineProbability, setByzantineProbability] = useState(0.2);
   const [messages, setMessages] = useState<MessageFields[]>([]);
   const [numNodes, setNumNodes] = useState(10);
-  const [nodes, setNodes] = useState<NodeFields[]>(
-    Array(numNodes)
-      .fill(null)
-      .map((_, i) => ({
-        id: i,
-        state: NodeState.IDLE,
-        value: null,
-        isByzantine: Math.random() < byzantineProbability,
-        view: 0,
-      }))
-  );
   const [showAllMessages, setShowAllMessages] = useState(false);
   const [selectedNode, setSelectedNode] = useState<number | null>(null);
   const [currentPhase, setCurrentPhase] = useState<Phase>(Phase.IDLE);
   const [blockchain, setBlockchain] = useState<Block[]>([]);
   const [currentView, setCurrentView] = useState(0);
   const [failureCount, setFailureCount] = useState(0);
+  const [nodes, setNodes] = useState<Node[]>([]);
   const [currentLeader, setCurrentLeader] = useState<number>(0);
 
   const byzantineNodeCount = nodes.filter((node) => node.isByzantine).length;
@@ -92,17 +163,17 @@ export default function App() {
   useEffect(() => {
     if (isAllHonest) {
       setNodes((prev) =>
-        prev.map((node) => ({
-          ...node,
-          isByzantine: false,
-        }))
+        prev.map((node) => {
+          node.isByzantine = false;
+          return node;
+        })
       );
     } else {
       setNodes((prev) =>
-        prev.map((node) => ({
-          ...node,
-          isByzantine: Math.random() < byzantineProbability,
-        }))
+        prev.map((node) => {
+          node.isByzantine = Math.random() < byzantineProbability;
+          return node;
+        })
       );
     }
   }, [isAllHonest]);
@@ -111,51 +182,46 @@ export default function App() {
     setNodes(
       Array(numNodes)
         .fill(null)
-        .map((_, i) => ({
-          id: i,
-          state: NodeState.IDLE,
-          value: null,
-          isByzantine: Math.random() < byzantineProbability,
-          view: 0,
-        }))
+        .map((_, i) => {
+          const isByzantine = Math.random() < byzantineProbability;
+          return i === currentLeader
+            ? new LeaderNode(i, isByzantine, byzantineProbability, numNodes)
+            : new Node(i, isByzantine, byzantineProbability);
+        })
     );
-  }, [numNodes, byzantineProbability]);
+  }, [numNodes, byzantineProbability, currentLeader]);
 
   const startConsensus = () => {
     setCurrentPhase(Phase.PROPOSE);
     setNodes(
-      nodes.map((node) => ({ ...node, state: NodeState.IDLE, value: null }))
+      nodes.map((node) => {
+        node.reset();
+        return node;
+      })
     );
     const newLeader = (currentLeader + 1) % numNodes;
     setCurrentLeader(newLeader);
+    setNodes((prevNodes) => {
+      const newNodes = prevNodes.map((node, index) =>
+        index === newLeader
+          ? new LeaderNode(node.id, node.isByzantine, byzantineProbability, numNodes)
+          : node
+      );
+      return newNodes;
+    });
   };
 
   const handleAction = (action: string) => {
-    const newNodes = [...nodes];
-    const newMessages = [...messages];
-
     if (currentPhase === Phase.IDLE) {
       return;
     }
 
     if (currentPhase === Phase.PROPOSE) {
-      // Only the leader proposes a value
-      const leaderNode = newNodes[currentLeader];
-      leaderNode.value = action;
-      leaderNode.state = NodeState.PROPOSED;
+      const newNodes = [...nodes];
+      const leaderNode = newNodes[currentLeader] as LeaderNode;
+      leaderNode.propose(action);
 
-      // Leader sends pre-prepare messages to all other nodes
-      newNodes.forEach((node) => {
-        if (node.id !== currentLeader) {
-          newMessages.push({
-            from: currentLeader,
-            to: node.id.toString(),
-            type: "pre-prepare",
-            value: action,
-            view: currentView,
-          });
-        }
-      });
+      const newMessages = leaderNode.prePrepare(action);
 
       setCurrentPhase(Phase.PRE_PREPARE);
       setNodes(newNodes);
@@ -165,66 +231,22 @@ export default function App() {
   };
 
   const automaticConsensus = (
-    nodes: NodeFields[],
+    nodes: Node[],
     messages: MessageFields[],
     clientAction: string
   ) => {
-    // Pre-prepare phase
-    nodes.forEach((node) => {
-      const recipients = nodes.filter((n) => n.id !== node.id);
-      recipients.forEach((recipient) => {
-        messages.push({
-          from: node.id,
-          to: recipient.id.toString(),
-          type: "pre-prepare",
-          value: node.value,
-          view: node.view,
-        });
-      });
-      node.state = NodeState.PRE_PREPARED;
-    });
-
     // Prepare phase
     nodes.forEach((node, index) => {
       if (index !== currentLeader) {
-        const prepareValue = node.isByzantine
-          ? clientAction === "A"
-            ? "B"
-            : "A"
-          : clientAction;
-        const recipients = nodes.filter((n) => n.id !== node.id);
-        recipients.forEach((recipient) => {
-          messages.push({
-            from: node.id,
-            to: recipient.id.toString(),
-            type: "prepare",
-            value: prepareValue,
-            view: node.view,
-          });
-        });
-        node.state = NodeState.PREPARED;
-        node.value = prepareValue;
+        const prepareMessages = node.prepare(clientAction, numNodes);
+        messages.push(...prepareMessages);
       }
     });
 
     // Commit phase
     nodes.forEach((node) => {
-      const commitValue = node.isByzantine
-        ? clientAction === "A"
-          ? "B"
-          : "A"
-        : clientAction;
-      const recipients = nodes.filter((n) => n.id !== node.id);
-      recipients.forEach((recipient) => {
-        messages.push({
-          from: node.id,
-          to: recipient.id.toString(),
-          type: "commit",
-          value: commitValue,
-          view: node.view,
-        });
-      });
-      node.state = NodeState.COMMITTED;
+      const commitMessages = node.commit(clientAction, numNodes);
+      messages.push(...commitMessages);
     });
 
     // Add new block to the blockchain
@@ -290,7 +312,10 @@ export default function App() {
 
     // Reset nodes for the new view
     setNodes((prev) =>
-      prev.map((node) => ({ ...node, state: NodeState.IDLE, value: null }))
+      prev.map((node) => {
+        node.reset();
+        return node;
+      })
     );
 
     // After a short delay, start a new consensus round
@@ -300,7 +325,7 @@ export default function App() {
     }, 2000);
   };
 
-  const getMajorityValue = (nodes: NodeFields[]) => {
+  const getMajorityValue = (nodes: Node[]) => {
     const valueCounts = nodes.reduce((acc, node) => {
       if (node.value) {
         acc[node.value] = (acc[node.value] || 0) + 1;
@@ -397,7 +422,7 @@ export default function App() {
 
       <div className="grid grid-cols-8 gap-4 mb-4">
         {nodes.map((node) => (
-          <Node
+          <NodeComponent
             key={node.id}
             {...node}
             isActive={
