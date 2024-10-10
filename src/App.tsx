@@ -85,6 +85,7 @@ export default function App() {
   const [blockchain, setBlockchain] = useState<Block[]>([]);
   const [currentView, setCurrentView] = useState(0);
   const [failureCount, setFailureCount] = useState(0);
+  const [currentLeader, setCurrentLeader] = useState<number>(0);
 
   const byzantineNodeCount = nodes.filter((node) => node.isByzantine).length;
 
@@ -125,7 +126,8 @@ export default function App() {
     setNodes(
       nodes.map((node) => ({ ...node, state: NodeState.IDLE, value: null }))
     );
-    setMessages([]);
+    const newLeader = (currentLeader + 1) % numNodes;
+    setCurrentLeader(newLeader);
   };
 
   const handleAction = (action: string) => {
@@ -137,15 +139,27 @@ export default function App() {
     }
 
     if (currentPhase === Phase.PROPOSE) {
+      // Only the leader proposes a value
+      const leaderNode = newNodes[currentLeader];
+      leaderNode.value = action;
+      leaderNode.state = NodeState.PROPOSED;
+
+      // Leader sends pre-prepare messages to all other nodes
       newNodes.forEach((node) => {
-        if (node.isByzantine) {
-          node.value = action === "A" ? "B" : "A";
-        } else {
-          node.value = action;
+        if (node.id !== currentLeader) {
+          newMessages.push({
+            from: currentLeader,
+            to: node.id.toString(),
+            type: "pre-prepare",
+            value: action,
+            view: currentView,
+          });
         }
-        node.state = NodeState.PROPOSED;
       });
+
       setCurrentPhase(Phase.PRE_PREPARE);
+      setNodes(newNodes);
+      setMessages(newMessages);
       automaticConsensus(newNodes, newMessages, action);
     }
   };
@@ -171,24 +185,26 @@ export default function App() {
     });
 
     // Prepare phase
-    nodes.forEach((node) => {
-      const prepareValue = node.isByzantine
-        ? clientAction === "A"
-          ? "B"
-          : "A"
-        : clientAction;
-      const recipients = nodes.filter((n) => n.id !== node.id);
-      recipients.forEach((recipient) => {
-        messages.push({
-          from: node.id,
-          to: recipient.id.toString(),
-          type: "prepare",
-          value: prepareValue,
-          view: node.view,
+    nodes.forEach((node, index) => {
+      if (index !== currentLeader) {
+        const prepareValue = node.isByzantine
+          ? clientAction === "A"
+            ? "B"
+            : "A"
+          : clientAction;
+        const recipients = nodes.filter((n) => n.id !== node.id);
+        recipients.forEach((recipient) => {
+          messages.push({
+            from: node.id,
+            to: recipient.id.toString(),
+            type: "prepare",
+            value: prepareValue,
+            view: node.view,
+          });
         });
-      });
-      node.state = NodeState.PREPARED;
-      node.value = prepareValue;
+        node.state = NodeState.PREPARED;
+        node.value = prepareValue;
+      }
     });
 
     // Commit phase
@@ -352,6 +368,7 @@ export default function App() {
       </div>
       <p className="mb-4">Current Phase: {currentPhase}</p>
       <p className="mb-4">Current View: {currentView}</p>
+      <p className="mb-4">Current Leader: Node {currentLeader}</p>
       <p className="mb-4">
         Byzantine Nodes: {byzantineNodeCount} / {numNodes} (
         {Math.round((byzantineNodeCount / numNodes) * 100)}%)
